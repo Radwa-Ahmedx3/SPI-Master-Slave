@@ -97,47 +97,61 @@ state <= TRANSFER;
     end
 
 //////////////////////////TRANSFER///////////////////////////////
+
     TRANSFER:
     begin
+
 busy <= 1'b1; //ensure busy flag is raised --> in transfer no data should be loaded
-/******************************COUNTER DIVIDER LOGIC********************************************/
+
+
+ //clock divider
 if (clk_counter == CLK_DIV -1) begin
   clk_counter <= 8'b0;
   SCLK <= ~SCLK;
-//transferring data
- if(SCLK==1'b0) begin
-//takes first 9 bits and concats with miso as lsb and shift left
-if(MSB_FIRST) begin
-rx_shift <= {rx_shift[DATA_WIDTH-2:0], MISO};
-end
-else begin
-//shift right and miso msb
-rx_shift <= {MISO , rx_shift[DATA_WIDTH-1:1]};
-end
-end
-else begin
 
-if (bit_count == DATA_WIDTH-1) begin
-state <= FINISH;
-end
-else begin
 
-if (MSB_FIRST) begin
-tx_shift <= tx_shift << 1;
-end
-else begin
-tx_shift <= tx_shift >> 1;
-end
 
-bit_count <= bit_count +1'b1;
+         //transferring data --> RISING EDGE
+     if(SCLK==1'b0) begin
 
-end
-end
+
+          //takes first 9 bits and concats with miso as lsb and shift left
+            if(MSB_FIRST) begin
+                rx_shift <= {rx_shift[DATA_WIDTH-2:0], MISO};
+                          end
+            else begin
+                    //shift right and miso msb
+
+                rx_shift <= {MISO , rx_shift[DATA_WIDTH-1:1]};
+                          end
+      end
+     else begin //FALLING EDGE --> SCLK==1
+
+            if (bit_count == DATA_WIDTH-1) begin
+
+                state <= FINISH;
+                          end
+            else begin  //continue transmitting
+
+                if (MSB_FIRST) begin
+                      tx_shift <= tx_shift << 1;
+                                end
+                else begin //LSB first
+                      tx_shift <= tx_shift >> 1;
+                                end
+
+            bit_count <= bit_count +1'b1; //increment counter
+
+                  end
+           end
   end 
-else begin
- clk_counter <= clk_counter + 1;
+
+
+     //increment clk_counter 
+    else begin
+       clk_counter <= clk_counter + 1;
+          end
 end
-    end
 
     FINISH:
     begin
