@@ -29,10 +29,11 @@ output reg done
 
 /////////////////////LOCAL PARAMETERS FOR FSM//////////////////////////////
 
-localparam IDLE     = 2'd0;
-localparam LOAD     = 2'd1;
-localparam TRANSFER = 2'd2;
-localparam FINISH   = 2'd3;
+localparam IDLE      = 3'd0;
+localparam LOAD      = 3'd1;
+localparam WAIT_CS   = 3'd2;   // NEW
+localparam TRANSFER  = 3'd3;
+localparam FINISH    = 3'd4;
 
                  //////////////////////////////////////////////////////////////////////////
                        /********************INTERNAL SIGNALS*********************/
@@ -44,9 +45,9 @@ reg [DATA_WIDTH-1:0] rx_shift;
 
 reg [$clog2(DATA_WIDTH)-1:0] bit_count;  //clog2 calculates bits needed to count the bits transferred counts 0 to 31
 
-reg [1:0] state; //stores current state in FSM
+  reg [2:0] state; //stores current state in FSM
 reg [7:0] clk_counter; //optional for clk divider
-
+  reg [2:0] cs_wait_cnt;
               // update mosi when tx_shift changes
 assign MOSI = (MSB_FIRST)? tx_shift[DATA_WIDTH-1] : tx_shift[0];
 
@@ -64,7 +65,7 @@ tx_shift <=0;
 rx_shift <=0;
 rx_data <=0;
 bit_count   <= 0;
-//clk_counter <= 0; //optional
+  cs_wait_cnt <= 0;
 end
 
 else begin
@@ -92,10 +93,35 @@ busy <= 1'b1; //don't transmit any data yet until i finish loading
 done <= 1'b0;
 cs_n <= 1'b0;
   clk_counter <= 8'b0;
-
-state <= TRANSFER;
+cs_wait_cnt <= 0;
+state <= WAIT_CS;
     end
 
+WAIT_CS:
+begin
+    busy <= 1'b1;
+    done <= 1'b0;
+
+    if (clk_counter == CLK_DIV-1) begin
+
+        clk_counter <= 0;
+        SCLK <= ~SCLK;
+
+        if (cs_wait_cnt == 1) begin
+            cs_wait_cnt <= 0;
+            clk_counter <= 0;
+            state <= TRANSFER;
+        end
+        else begin
+            cs_wait_cnt <= cs_wait_cnt + 1;
+        end
+
+    end
+    else begin
+        clk_counter <= clk_counter + 1;
+    end
+end
+  
 //////////////////////////TRANSFER///////////////////////////////
 
     TRANSFER:
