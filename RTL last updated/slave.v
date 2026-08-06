@@ -1,3 +1,10 @@
+/*
+Author: Eyad Khaled Mabrouk Noah
+Module: spi_Slave
+Modelling: RTL
+Date: 4/8/2026
+*/
+
 module slave (clk,rstn,ss_n,miso,mosi,rx_data,rx_valid,tx_data,tx_valid);
 parameter [2:0] idle=000;
 parameter [2:0] check=001;
@@ -19,95 +26,119 @@ reg [3:0] counter;
 reg [3:0] counter_4_read_data;
 reg first_bit;
 
-// NEW: dedicated shift register and bit counter for the 10-bit frame
-reg [data_width+1:0] shift_reg; // 10-bit shift register
-reg [3:0] bit_cnt;              // counts 0..10
+always @(negedge clk or negedge rstn) begin
+	if(~rstn) begin
+		cs <= idle;
+	end
 
-always @(posedge clk or negedge rstn) begin
-    if (~rstn) begin
-        // reset everything that was previously reset
-        miso <= 0;
-        read_addr_flag <= 0;
-        rx_valid <= 0;
-        rx_data <= 0;
-        counter <= 0;
-        counter_4_read_data <= 0;
-
-        // new regs
-        shift_reg <= 0;
-        bit_cnt <= 0;
-    end
-    else begin
-        // If chip select is high, reset the per-frame state so capture restarts cleanly.
-        if (ss_n) begin
-            shift_reg <= 0;
-            bit_cnt <= 0;
-            rx_valid <= 0;
-            counter <= 0;
-            counter_4_read_data <= 0;
-            read_addr_flag <= 0;
-            // keep miso at 0 when not selected
-            miso <= 0;
-        end
-        else begin
-            // Capture bits in every state that expects serial input.
-            // Use a single shift register that shifts left and inserts MOSI at LSB:
-            // This correctly assembles MSB-first frames into shift_reg so after 10 samples
-            // shift_reg == transmitted 10-bit word.
-
-            // --- Modified framing: assert rx_valid on the SAME cycle we sample the 10th bit ---
-            if (bit_cnt < (data_width + 2 - 1)) begin
-                // still collecting bits (haven't received the 10th bit yet)
-                shift_reg <= { shift_reg[data_width:0], mosi }; // shift in new bit
-                bit_cnt <= bit_cnt + 1;
-                rx_valid <= 1'b0;
-            end
-            else begin
-                // This posedge is sampling the 10th bit. Assemble final word and pulse rx_valid for one cycle.
-                rx_data <= { shift_reg[data_width:0], mosi }; // final 10-bit word (old shift_reg + current MOSI)
-                rx_valid <= 1'b1;
-                bit_cnt <= 0;
-                shift_reg <= 0;
-                // rx_valid will be cleared on the next collecting cycle (above).
-            end
-
-            // Now handle read_data transmit (miso) and other state-dependent behaviour
-            case (cs)
-                check: begin
-                    // nothing else needed here: capture done above
-                end
-
-                write: begin
-                    // no special action here; rx_valid will indicate full frame to RAM
-                    // Keep counter for backward compat (not used for framing anymore)
-                    counter <= 0;
-                end
-
-                read_addr: begin
-                    if (rx_valid) begin
-                        read_addr_flag <= 1'b1;
-                    end
-                end
-
-                read_data: begin
-                    // Shift out tx_data directly on MISO during read_data state
-                    if (counter_4_read_data < 8) begin
-                        miso <= tx_data[7 - counter_4_read_data];
-                        counter_4_read_data <= counter_4_read_data + 1;
-                    end
-                    else if (counter_4_read_data == 8) begin
-                        counter_4_read_data <= 0;
-                    end
-
-                    read_addr_flag <= 0;
-                end
-
-                default: begin
-                    counter <= 0;
-                    counter_4_read_data <= 0;
-                end
-            endcase
-        end
-    end
+	else begin
+		cs <= ns;
+	end
 end
-endmodule 
+
+always @(*)begin
+	case (cs)
+	idle:begin
+		if(ss_n) ns=idle;
+		else ns=check;
+	end
+	check:begin
+		if(ss_n) ns=idle;
+		else begin
+			if (~mosi) ns = write;
+
+			else if (mosi) begin
+				if (read_addr_flag) ns=read_data;
+				else ns=read_addr;
+			end
+		end
+	end
+	write:begin
+		if(ss_n) ns=idle;
+		else ns=write;
+	end
+	read_data:begin
+		if(ss_n) ns=idle;
+		else ns=read_data;
+	end
+	read_addr:begin
+		if(ss_n) ns=idle;
+		else ns=read_addr;
+	end
+	default: ns=idle;
+	endcase
+end
+
+
+always @(negedge clk or negedge rstn) begin
+	if (~rstn) begin
+		miso <= 0;
+		read_addr_flag <= 0;
+		rx_valid <= 0;
+		rx_data <= 0;
+		counter <= 0;
+		counter_4_read_data <= 0;
+	end
+
+	else begin
+		case(cs)
+			check:begin
+				rx_data [9] <= mosi;
+				counter  <= counter + 1;
+			end
+			write: begin
+                if (counter < 10) begin
+                   rx_data[9 - counter] <= mosi;
+                    counter  <= counter + 1;
+                    rx_valid <= 0;
+                end 
+                else begin 
+                    counter  <= 0; 
+                    rx_valid <= 1;
+                end
+            end
+			read_addr: begin
+                if (counter < 10) begin
+                    rx_data[9 - counter] <= mosi;
+                    counter  <= counter + 1;
+                    rx_valid <= 0;
+                end 
+                else begin 
+                    counter <= 0;
+                    rx_valid <= 1; 
+                end
+                read_addr_flag <= 1;
+            end
+			read_data: begin
+				if (counter < 10) begin
+					rx_data[9 - counter] <= mosi;
+					counter <= counter + 1;
+					rx_valid <= 0;
+				end
+				else begin 
+					counter <= 0;
+					rx_valid <= 1;
+				end
+
+				if (tx_valid) begin        
+					miso <= tx_data[7];                   
+					counter_4_read_data <= 1;             
+				end 
+				else if (counter_4_read_data >= 1 && counter_4_read_data < 8) begin
+					miso <= tx_data [7 - counter_4_read_data]; 
+					counter_4_read_data <= counter_4_read_data + 1;
+				end 
+				else if (counter_4_read_data == 8) begin
+					counter_4_read_data <= 0;             
+				end
+
+				read_addr_flag <= 0; 
+			end
+			default:begin
+				counter <= 0;
+				counter_4_read_data <= 0;
+			end
+		endcase
+	end
+end
+endmodule
